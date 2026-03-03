@@ -53,6 +53,17 @@ function main() {
     }
 
     try {
+      // Skip deployments that intentionally have no on-chain addresses yet
+      // (e.g. networks listed but contracts not deployed).
+      const manifestText = fs.readFileSync(manifestPath, 'utf8');
+      const hasEmptyAddress = /address:\s*""/m.test(manifestText);
+      const hasEmptyStartBlock = /startBlock:\s*$/m.test(manifestText);
+      if (hasEmptyAddress || hasEmptyStartBlock) {
+        log(`⚠️  Skipping ${deployment}: missing contract address/startBlock in manifest`, 'yellow');
+        results.push({ deployment, success: true, skipped: true });
+        continue;
+      }
+
       log(`🔨 Building ${deployment}...`, 'cyan');
 
       // Run graph codegen

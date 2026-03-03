@@ -7,11 +7,10 @@ import {
 import {
   Agent,
   Validation,
-  AgentStats,
-  GlobalStats,
-  Protocol
+  ValidationPoint
 } from "../generated/schema"
-import { getContractAddresses, getChainName, isSupportedChain } from "./contract-addresses"
+import { getOrCreateProtocol } from "./utils/protocol"
+import { makeTimeseriesPointId } from "./utils/timeseries"
 
 
 // =============================================================================
@@ -54,29 +53,23 @@ export function handleValidationRequest(event: ValidationRequest): void {
   agent.lastActivity = event.block.timestamp
   agent.updatedAt = event.block.timestamp
   agent.save()
-  
-  // Update agent stats
-  updateAgentValidationStats(agentEntityId, true, false, 0, event.block.timestamp)
-  
-  // Update protocol stats
-  updateProtocolStats(BigInt.fromI32(chainId), agent, event.block.timestamp)
-  
-  // Update global stats - validation
-  let globalStats = GlobalStats.load("global")
-  if (globalStats == null) {
-    globalStats = new GlobalStats("global")
-    globalStats.totalAgents = BigInt.fromI32(0)
-    globalStats.totalFeedback = BigInt.fromI32(0)
-    globalStats.totalValidations = BigInt.fromI32(0)
-    globalStats.totalProtocols = BigInt.fromI32(0)
-    globalStats.agents = []
-    globalStats.tags = []
-    globalStats.updatedAt = BigInt.fromI32(0)
+
+  // Ensure protocol exists and emit validation request point (analytics via aggregations)
+  let protocol = getOrCreateProtocol(BigInt.fromI32(chainId), event.block.timestamp)
+  if (protocol != null) {
+    let pid = makeTimeseriesPointId(event.block.number, event.logIndex)
+    let p = new ValidationPoint(pid)
+    p.protocol = protocol.id
+    p.agent = agentEntityId
+    p.timestamp = event.block.timestamp.toI64()
+    p.score = 0
+    p.isRequest = true
+    p.isResponse = false
+    p.requestCount = BigInt.fromI32(1)
+    p.responseCount = BigInt.fromI32(0)
+    p.responseScore = BigInt.fromI32(0)
+    p.save()
   }
-  
-  globalStats.totalValidations = globalStats.totalValidations.plus(BigInt.fromI32(1))
-  globalStats.updatedAt = event.block.timestamp
-  globalStats.save()
   
   log.info("Validation request for agent {}: {}", [agentEntityId, requestHash.toHexString()])
 }
@@ -118,21 +111,22 @@ export function handleValidationResponse(event: ValidationResponse): void {
     agent.updatedAt = event.block.timestamp
     agent.save()
   }
-  
-  // Update agent stats
-  updateAgentValidationStats(agentEntityId, false, true, response, event.block.timestamp)
-  
-  // Do NOT increment protocol/global totals here; totals are counted on ValidationRequest.
-  // We only touch updatedAt for observability.
-  let protocol = Protocol.load(BigInt.fromI32(chainId).toString())
+
+  // Ensure protocol exists and emit validation response point
+  let protocol = getOrCreateProtocol(BigInt.fromI32(chainId), event.block.timestamp)
   if (protocol != null) {
-    protocol.updatedAt = event.block.timestamp
-    protocol.save()
-  }
-  let globalStats = GlobalStats.load("global")
-  if (globalStats != null) {
-    globalStats.updatedAt = event.block.timestamp
-    globalStats.save()
+    let pid = makeTimeseriesPointId(event.block.number, event.logIndex)
+    let p = new ValidationPoint(pid)
+    p.protocol = protocol.id
+    p.agent = agentEntityId
+    p.timestamp = event.block.timestamp.toI64()
+    p.score = response
+    p.isRequest = false
+    p.isResponse = true
+    p.requestCount = BigInt.fromI32(0)
+    p.responseCount = BigInt.fromI32(1)
+    p.responseScore = BigInt.fromI32(response)
+    p.save()
   }
   
   log.info("Validation response for agent {}: score {}", [agentEntityId, response.toString()])
@@ -142,97 +136,7 @@ export function handleValidationResponse(event: ValidationResponse): void {
 // HELPER FUNCTIONS
 // =============================================================================
 
-function updateAgentValidationStats(agentId: string, isRequest: boolean, isResponse: boolean, score: i32, timestamp: BigInt): void {
-  let stats = AgentStats.load(agentId)
-  
-  if (stats == null) {
-    stats = new AgentStats(agentId)
-    stats.agent = agentId
-    stats.totalFeedback = BigInt.fromI32(0)
-    stats.averageFeedbackValue = BigDecimal.fromString("0")
-    stats.totalValidations = BigInt.fromI32(0)
-    stats.completedValidations = BigInt.fromI32(0)
-    stats.averageValidationScore = BigDecimal.fromString("0")
-    stats.lastActivity = timestamp
-  }
-  
-  if (isRequest) {
-    stats.totalValidations = stats.totalValidations.plus(BigInt.fromI32(1))
-  }
-  
-  if (isResponse) {
-    stats.completedValidations = stats.completedValidations.plus(BigInt.fromI32(1))
-    
-    // Update average validation score
-    if (stats.completedValidations.gt(BigInt.fromI32(0))) {
-      let totalScore = stats.averageValidationScore.times(BigDecimal.fromString(stats.completedValidations.minus(BigInt.fromI32(1)).toString()))
-      let newTotalScore = totalScore.plus(BigDecimal.fromString(score.toString()))
-      stats.averageValidationScore = newTotalScore.div(BigDecimal.fromString(stats.completedValidations.toString()))
-    }
-    
-    // Reputation score calculation removed
-  }
-  
-  stats.lastActivity = timestamp
-  stats.updatedAt = timestamp
-  stats.save()
-}
-
-// Reputation score calculation removed
-
-function updateProtocolStats(chainId: BigInt, agent: Agent, timestamp: BigInt): void {
-  // Check if chain is supported
-  if (!isSupportedChain(chainId)) {
-    log.warning("Unsupported chain: {}", [chainId.toString()])
-    return
-  }
-
-  let protocolId = chainId.toString()
-  let protocol = Protocol.load(protocolId)
-  
-  if (protocol == null) {
-    protocol = new Protocol(protocolId)
-    protocol.chainId = chainId
-    protocol.name = getChainName(chainId)
-    
-    // Get contract addresses dynamically based on chain
-    let addresses = getContractAddresses(chainId)
-    protocol.identityRegistry = addresses.identityRegistry
-    protocol.reputationRegistry = addresses.reputationRegistry
-    protocol.validationRegistry = addresses.validationRegistry
-    
-    // Initialize all fields
-    protocol.totalAgents = BigInt.fromI32(0)
-    protocol.totalFeedback = BigInt.fromI32(0)
-    protocol.totalValidations = BigInt.fromI32(0)
-    protocol.agents = []
-    protocol.tags = []
-    protocol.updatedAt = BigInt.fromI32(0)
-  }
-  
-  protocol.totalValidations = protocol.totalValidations.plus(BigInt.fromI32(1))
-  protocol.updatedAt = timestamp
-  protocol.save()
-}
-
-function updateGlobalStats(timestamp: BigInt): void {
-  let globalStats = GlobalStats.load("global")
-  
-  if (globalStats == null) {
-    globalStats = new GlobalStats("global")
-    globalStats.totalAgents = BigInt.fromI32(0)
-    globalStats.totalFeedback = BigInt.fromI32(0)
-    globalStats.totalValidations = BigInt.fromI32(0)
-    globalStats.totalProtocols = BigInt.fromI32(0)
-    globalStats.agents = []
-    globalStats.tags = []
-    globalStats.updatedAt = BigInt.fromI32(0)
-  }
-  
-  globalStats.totalValidations = globalStats.totalValidations.plus(BigInt.fromI32(1))
-  globalStats.updatedAt = timestamp
-  globalStats.save()
-}
+// Analytics moved to timeseries + aggregations.
 
 
 // =============================================================================

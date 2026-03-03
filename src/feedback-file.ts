@@ -1,5 +1,24 @@
-import { Bytes, dataSource, json, log, BigInt, JSONValueKind } from '@graphprotocol/graph-ts'
+import { Bytes, dataSource, json, log, BigInt, JSONValue, JSONValueKind, TypedMap } from '@graphprotocol/graph-ts'
 import { FeedbackFile, Feedback } from '../generated/schema'
+
+function readOptionalString(obj: TypedMap<string, JSONValue>, key: string): string | null {
+  let v = obj.get(key)
+  if (v && !v.isNull() && v.kind == JSONValueKind.STRING) {
+    return v.toString()
+  }
+  return null
+}
+
+function readOptionalStringArray(obj: TypedMap<string, JSONValue>, key: string): string[] | null {
+  let v = obj.get(key)
+  if (!v || v.isNull() || v.kind != JSONValueKind.ARRAY) return null
+  let arr = v.toArray()
+  let out: string[] = []
+  for (let i = 0; i < arr.length; i++) {
+    if (arr[i].kind == JSONValueKind.STRING) out.push(arr[i].toString())
+  }
+  return out
+}
 
 export function parseFeedbackFile(content: Bytes): void {
   let context = dataSource.context()
@@ -86,12 +105,12 @@ export function parseFeedbackFile(content: Bytes): void {
   if (mcp && !mcp.isNull() && mcp.kind == JSONValueKind.OBJECT) {
     let m = mcp.toObject()
     if (m != null) {
-      let tool = m.get('tool')
-      if (tool && !tool.isNull() && tool.kind == JSONValueKind.STRING) feedbackFile.mcpTool = tool.toString()
-      let prompt = m.get('prompt')
-      if (prompt && !prompt.isNull() && prompt.kind == JSONValueKind.STRING) feedbackFile.mcpPrompt = prompt.toString()
-      let resource = m.get('resource')
-      if (resource && !resource.isNull() && resource.kind == JSONValueKind.STRING) feedbackFile.mcpResource = resource.toString()
+      let tool = readOptionalString(m, 'tool')
+      if (tool != null) feedbackFile.mcpTool = tool
+      let prompt = readOptionalString(m, 'prompt')
+      if (prompt != null) feedbackFile.mcpPrompt = prompt
+      let resource = readOptionalString(m, 'resource')
+      if (resource != null) feedbackFile.mcpResource = resource
     }
   }
 
@@ -99,15 +118,8 @@ export function parseFeedbackFile(content: Bytes): void {
   if (a2a && !a2a.isNull() && a2a.kind == JSONValueKind.OBJECT) {
     let a = a2a.toObject()
     if (a != null) {
-      let skills = a.get('skills')
-      if (skills && !skills.isNull() && skills.kind == JSONValueKind.ARRAY) {
-        let arr = skills.toArray()
-        let out: string[] = []
-        for (let i = 0; i < arr.length; i++) {
-          if (arr[i].kind == JSONValueKind.STRING) out.push(arr[i].toString())
-        }
-        feedbackFile.a2aSkills = out
-      }
+      let skills = readOptionalStringArray(a, 'skills')
+      if (skills != null) feedbackFile.a2aSkills = skills
 
       let contextId = a.get('contextId')
       if (contextId && !contextId.isNull() && contextId.kind == JSONValueKind.STRING) {
@@ -125,25 +137,11 @@ export function parseFeedbackFile(content: Bytes): void {
   if (oasf && !oasf.isNull() && oasf.kind == JSONValueKind.OBJECT) {
     let o = oasf.toObject()
     if (o != null) {
-      let skills = o.get('skills')
-      if (skills && !skills.isNull() && skills.kind == JSONValueKind.ARRAY) {
-        let arr = skills.toArray()
-        let out: string[] = []
-        for (let i = 0; i < arr.length; i++) {
-          if (arr[i].kind == JSONValueKind.STRING) out.push(arr[i].toString())
-        }
-        feedbackFile.oasfSkills = out
-      }
+      let skills = readOptionalStringArray(o, 'skills')
+      if (skills != null) feedbackFile.oasfSkills = skills
 
-      let domains = o.get('domains')
-      if (domains && !domains.isNull() && domains.kind == JSONValueKind.ARRAY) {
-        let arr = domains.toArray()
-        let out: string[] = []
-        for (let i = 0; i < arr.length; i++) {
-          if (arr[i].kind == JSONValueKind.STRING) out.push(arr[i].toString())
-        }
-        feedbackFile.oasfDomains = out
-      }
+      let domains = readOptionalStringArray(o, 'domains')
+      if (domains != null) feedbackFile.oasfDomains = domains
     }
   }
 

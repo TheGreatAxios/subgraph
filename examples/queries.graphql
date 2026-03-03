@@ -374,28 +374,37 @@ query GetAgentsWithStats {
 # HELPER QUERIES
 # =============================================================================
 
-# Get protocol-wide statistics
-query GetProtocolStats {
-  globalStats(id: "global") {
-    totalAgents
-    totalFeedback
-    totalValidations
-    totalProtocols
-    tags
-    updatedAt
+# Protocol/chain-wide stats now come from aggregations (timeseries rollups).
+#
+# Note: aggregation queries require an `interval` argument ("hour" or "day").
+# Use `current: include` if you want the in-progress bucket.
+
+# Get chain-level feedback stats (cumulative, daily buckets)
+query GetSepoliaFeedbackStatsDaily {
+  protocolFeedbackStats(
+    interval: "day"
+    current: include
+    where: { protocol: "11155111" }
+    first: 14
+  ) {
+    timestamp
+    feedbackCreated
+    feedbackRevoked
+    valueSum
+    valueDeltaSum
   }
 }
 
-# Get specific chain statistics (Sepolia)
-query GetSepoliaStats {
-  protocol(id: "11155111") {
-    id
-    name
-    totalAgents
-    totalFeedback
-    totalValidations
-    tags
-    updatedAt
+# Get chain-level agent registration stats (cumulative, daily buckets)
+query GetSepoliaAgentRegistrationsDaily {
+  protocolAgentStats(
+    interval: "day"
+    current: include
+    where: { protocol: "11155111" }
+    first: 14
+  ) {
+    timestamp
+    agentRegistrations
   }
 }
 

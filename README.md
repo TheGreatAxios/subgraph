@@ -29,8 +29,8 @@ Note: The Graph Gateway endpoints require authentication (API key / authorizatio
 
 ### Prerequisites
 
-- Node.js 16+
-- The Graph CLI: `npm install -g @graphprotocol/graph-cli`
+- Node.js 20.18.1+ (required by the pinned `@graphprotocol/graph-cli`)
+- The Graph CLI is installed as a project dependency (you can run it via `npx graph ...` or `npm run ...`)
 
 ### Installation
 
@@ -320,53 +320,45 @@ type FeedbackFile @entity(immutable: true) {
 }
 ```
 
-### Analytics & Aggregation Entities
+### Analytics (Timeseries + Aggregations)
 
-#### AgentStats
-```graphql
-type AgentStats @entity(immutable: false) {
-  id: ID!                    # "chainId:agentId"
-  agent: Agent!
-  totalFeedback: BigInt!
-  averageScore: BigDecimal!
-  scoreDistribution: [Int!]! # [0-20, 21-40, 41-60, 61-80, 81-100]
-  totalValidations: BigInt!
-  completedValidations: BigInt!
-  averageValidationScore: BigDecimal!
-  lastActivity: BigInt!
-  updatedAt: BigInt!
-}
-```
+This subgraph uses **Timeseries + `@aggregation`** for scalable protocol- and agent-level analytics (daily/hourly rollups). This replaces the old `GlobalStats`/`AgentStats` pattern.
 
-#### Protocol
+#### Protocol (chain-scoped root)
 ```graphql
 type Protocol @entity(immutable: false) {
   id: ID!                    # "chainId"
   chainId: BigInt!
-  name: String!              # Chain name (e.g., "Ethereum", "Base")
+  name: String!
   identityRegistry: Bytes!
   reputationRegistry: Bytes!
   validationRegistry: Bytes!
-  totalAgents: BigInt!
-  totalFeedback: BigInt!
-  totalValidations: BigInt!
-  agents: [Agent!]!
-  tags: [String!]!
+  createdAt: BigInt!
   updatedAt: BigInt!
 }
 ```
 
-#### GlobalStats
+#### Example aggregations (queryable with `interval: "hour" | "day"`)
 ```graphql
-type GlobalStats @entity(immutable: false) {
-  id: ID!                    # "global"
-  totalAgents: BigInt!
-  totalFeedback: BigInt!
-  totalValidations: BigInt!
-  totalProtocols: BigInt!
-  agents: [Agent!]!
-  tags: [String!]!
-  updatedAt: BigInt!
+type ProtocolFeedbackStats @aggregation(intervals: ["hour", "day"], source: "FeedbackPoint") {
+  id: Int8!
+  timestamp: Timestamp!
+  protocol: Protocol!
+  feedbackCreated: Int8!
+  feedbackRevoked: Int8!
+  valueSum: BigDecimal!
+  valueDeltaSum: BigDecimal!
+}
+
+type AgentFeedbackStats @aggregation(intervals: ["hour", "day"], source: "FeedbackPoint") {
+  id: Int8!
+  timestamp: Timestamp!
+  protocol: Protocol!
+  agent: Agent!
+  feedbackCreated: Int8!
+  feedbackRevoked: Int8!
+  valueSum: BigDecimal!
+  valueDeltaSum: BigDecimal!
 }
 ```
 
@@ -506,17 +498,21 @@ query FindAgentsByTrustModel($trustModel: String!) {
 }
 ```
 
-### Get Global Statistics
+### Get Chain Statistics (Aggregations)
 
 ```graphql
-query GetProtocolStats {
-  globalStats(id: "global") {
-    totalAgents
-    totalFeedback
-    totalValidations
-    totalProtocols
-    tags
-    updatedAt
+query GetSepoliaFeedbackStatsDaily {
+  protocolFeedbackStats(
+    interval: "day"
+    current: include
+    where: { protocol: "11155111" }
+    first: 14
+  ) {
+    timestamp
+    feedbackCreated
+    feedbackRevoked
+    valueSum
+    valueDeltaSum
   }
 }
 ```

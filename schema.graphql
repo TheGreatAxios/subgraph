@@ -106,37 +106,10 @@ type AgentMetadata @entity(immutable: false) {
   updatedAt: BigInt!
 }
 
-# =============================================================================
-# ENUMS
-# =============================================================================
-
 enum ValidationStatus {
   PENDING
   COMPLETED
   EXPIRED
-}
-
-# =============================================================================
-# AGGREGATION ENTITIES (for analytics and search)
-# =============================================================================
-
-type AgentStats @entity(immutable: false) {
-  id: ID! # "chainId:agentId"
-  agent: Agent!
-  
-  # Feedback statistics
-  totalFeedback: BigInt!
-  averageFeedbackValue: BigDecimal!
-  
-  # Validation statistics
-  totalValidations: BigInt!
-  completedValidations: BigInt!
-  averageValidationScore: BigDecimal!
-  
-  # Activity metrics
-  lastActivity: BigInt!
-  
-  updatedAt: BigInt!
 }
 
 # =============================================================================
@@ -152,39 +125,9 @@ type Protocol @entity(immutable: false) {
   identityRegistry: Bytes!
   reputationRegistry: Bytes!
   validationRegistry: Bytes!
-  
-  # Total counts (symmetric with GlobalStats)
-  totalAgents: BigInt!
-  totalFeedback: BigInt!
-  totalValidations: BigInt!
-  
-  # Search and discovery data (chain-specific)
-  agents: [Agent!]!           # Array of agents on this chain
-  tags: [String!]!           # All unique tags on this chain
-  
-  # Timestamps
-  updatedAt: BigInt!
-}
 
-# =============================================================================
-# GLOBAL STATISTICS
-# =============================================================================
-
-type GlobalStats @entity(immutable: false) {
-  id: ID! # "global"
-  
-  # Total counts
-  totalAgents: BigInt!
-  totalFeedback: BigInt!
-  totalValidations: BigInt!
-  totalProtocols: BigInt!
-  
-  # Search and discovery data
-  agents: [Agent!]!           # Array of all agents
-  tags: [String!]!           # All unique tags
-  
-  
   # Timestamps
+  createdAt: BigInt!
   updatedAt: BigInt!
 }
 
@@ -276,4 +219,96 @@ type FeedbackFile @entity(immutable: true) {
   tag2: String
   
   createdAt: BigInt!
+}
+
+# =============================================================================
+# TIMESERIES + AGGREGATIONS (analytics)
+# =============================================================================
+
+# Raw event points
+type AgentRegistrationPoint @entity(timeseries: true) {
+  id: Int8!
+  timestamp: Timestamp!
+  protocol: Protocol!
+  agent: Agent!
+}
+
+type FeedbackPoint @entity(timeseries: true) {
+  id: Int8!
+  timestamp: Timestamp!
+  protocol: Protocol!
+  agent: Agent!
+  value: BigDecimal!
+  valueDelta: BigDecimal!
+  isRevocation: Boolean!
+  createdCount: BigInt!
+  revokedCount: BigInt!
+  valueForSum: BigDecimal!
+}
+
+type ValidationPoint @entity(timeseries: true) {
+  id: Int8!
+  timestamp: Timestamp!
+  protocol: Protocol!
+  agent: Agent!
+  score: Int!
+  isRequest: Boolean!
+  isResponse: Boolean!
+  requestCount: BigInt!
+  responseCount: BigInt!
+  responseScore: BigInt!
+}
+
+# Rollups
+type ProtocolAgentStats @aggregation(intervals: ["hour", "day"], source: "AgentRegistrationPoint") {
+  id: Int8!
+  timestamp: Timestamp!
+  protocol: Protocol!
+  agentRegistrations: Int8! @aggregate(fn: "count", cumulative: true)
+}
+
+type ProtocolFeedbackStats @aggregation(intervals: ["hour", "day"], source: "FeedbackPoint") {
+  id: Int8!
+  timestamp: Timestamp!
+  protocol: Protocol!
+
+  feedbackCreated: BigInt! @aggregate(fn: "sum", arg: "createdCount", cumulative: true)
+  feedbackRevoked: BigInt! @aggregate(fn: "sum", arg: "revokedCount", cumulative: true)
+
+  valueSum: BigDecimal! @aggregate(fn: "sum", arg: "valueForSum", cumulative: true)
+  valueDeltaSum: BigDecimal! @aggregate(fn: "sum", arg: "valueDelta", cumulative: true)
+}
+
+type AgentFeedbackStats @aggregation(intervals: ["hour", "day"], source: "FeedbackPoint") {
+  id: Int8!
+  timestamp: Timestamp!
+  protocol: Protocol!
+  agent: Agent!
+
+  feedbackCreated: BigInt! @aggregate(fn: "sum", arg: "createdCount", cumulative: true)
+  feedbackRevoked: BigInt! @aggregate(fn: "sum", arg: "revokedCount", cumulative: true)
+
+  valueSum: BigDecimal! @aggregate(fn: "sum", arg: "valueForSum", cumulative: true)
+  valueDeltaSum: BigDecimal! @aggregate(fn: "sum", arg: "valueDelta", cumulative: true)
+}
+
+type ProtocolValidationStats @aggregation(intervals: ["hour", "day"], source: "ValidationPoint") {
+  id: Int8!
+  timestamp: Timestamp!
+  protocol: Protocol!
+
+  validationRequests: BigInt! @aggregate(fn: "sum", arg: "requestCount", cumulative: true)
+  validationResponses: BigInt! @aggregate(fn: "sum", arg: "responseCount", cumulative: true)
+  scoreSum: BigInt! @aggregate(fn: "sum", arg: "responseScore", cumulative: true)
+}
+
+type AgentValidationStats @aggregation(intervals: ["hour", "day"], source: "ValidationPoint") {
+  id: Int8!
+  timestamp: Timestamp!
+  protocol: Protocol!
+  agent: Agent!
+
+  validationRequests: BigInt! @aggregate(fn: "sum", arg: "requestCount", cumulative: true)
+  validationResponses: BigInt! @aggregate(fn: "sum", arg: "responseCount", cumulative: true)
+  scoreSum: BigInt! @aggregate(fn: "sum", arg: "responseScore", cumulative: true)
 }

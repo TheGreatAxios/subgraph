@@ -12,11 +12,10 @@ import {
   Feedback,
   FeedbackResponse,
   FeedbackFile,
-  AgentStats,
-  GlobalStats,
-  Protocol
+  FeedbackPoint
 } from "../generated/schema"
-import { getContractAddresses, getChainName, isSupportedChain } from "./contract-addresses"
+import { getOrCreateProtocol } from "./utils/protocol"
+import { makeTimeseriesPointId } from "./utils/timeseries"
 
 // =============================================================================
 // EVENT HANDLERS
@@ -81,6 +80,23 @@ export function handleNewFeedback(event: NewFeedback): void {
   }
   
   feedback.save()
+
+  // Ensure protocol exists and emit timeseries feedback point
+  let protocol = getOrCreateProtocol(BigInt.fromI32(chainId), event.block.timestamp)
+  if (protocol != null) {
+    let pid = makeTimeseriesPointId(event.block.number, event.logIndex)
+    let p = new FeedbackPoint(pid)
+    p.protocol = protocol.id
+    p.agent = agentEntityId
+    p.timestamp = event.block.timestamp.toI64()
+    p.value = feedbackValue
+    p.valueDelta = feedbackValue
+    p.isRevocation = false
+    p.createdCount = BigInt.fromI32(1)
+    p.revokedCount = BigInt.fromI32(0)
+    p.valueForSum = feedbackValue
+    p.save()
+  }
   
   // Trigger IPFS file data source if URI is IPFS
   if (event.params.feedbackURI.length > 0 && isIpfsUri(event.params.feedbackURI)) {
@@ -106,44 +122,8 @@ export function handleNewFeedback(event: NewFeedback): void {
     }
   }
   
-  // Update agent statistics
-  updateAgentStats(agent, feedbackValue, event.block.timestamp)
-  
-  // Tag statistics removed for scalability
-  
-  // Update protocol stats
-  updateProtocolStats(BigInt.fromI32(chainId), agent, event.block.timestamp, feedback.tag1 ? feedback.tag1! : "", event.params.tag2)
-  
-  // Update global stats - feedback
-  let globalStats = GlobalStats.load("global")
-  if (globalStats == null) {
-    globalStats = new GlobalStats("global")
-    globalStats.totalAgents = BigInt.fromI32(0)
-    globalStats.totalFeedback = BigInt.fromI32(0)
-    globalStats.totalValidations = BigInt.fromI32(0)
-    globalStats.totalProtocols = BigInt.fromI32(0)
-    globalStats.agents = []
-    globalStats.tags = []
-    globalStats.updatedAt = BigInt.fromI32(0)
-  }
-  
-  globalStats.totalFeedback = globalStats.totalFeedback.plus(BigInt.fromI32(1))
-  
-  // Add tags to global tags array
-  let currentGlobalTags = globalStats.tags
-  
-  // Process tag1
-  if (feedback.tag1 && feedback.tag1!.length > 0 && !currentGlobalTags.includes(feedback.tag1!)) {
-    currentGlobalTags.push(feedback.tag1!)
-  }
-  // Process tag2
-  if (event.params.tag2.length > 0 && !currentGlobalTags.includes(event.params.tag2)) {
-    currentGlobalTags.push(event.params.tag2)
-  }
-  
-  globalStats.tags = currentGlobalTags
-  globalStats.updatedAt = event.block.timestamp
-  globalStats.save()
+  // Update agent counters for quick lookups (analytics are handled by aggregations)
+  updateAgentCountersOnFeedback(agent, event.block.timestamp, true)
   
   log.info("New feedback for agent {}: value {} from {}", [
     agentEntityId,
@@ -167,11 +147,29 @@ export function handleFeedbackRevoked(event: FeedbackRevoked): void {
     feedback.isRevoked = true
     feedback.revokedAt = event.block.timestamp
     feedback.save()
-    
-    // Update agent stats to reflect revocation
+
+    // Ensure protocol exists and emit revocation point (valueDelta is negative)
+    let protocol = getOrCreateProtocol(BigInt.fromI32(chainId), event.block.timestamp)
+    if (protocol != null) {
+      let neg = BigDecimal.fromString("-1").times(feedback.value)
+      let pid = makeTimeseriesPointId(event.block.number, event.logIndex)
+      let p = new FeedbackPoint(pid)
+      p.protocol = protocol.id
+      p.agent = agentEntityId
+      p.timestamp = event.block.timestamp.toI64()
+      p.value = feedback.value
+      p.valueDelta = neg
+      p.isRevocation = true
+      p.createdCount = BigInt.fromI32(0)
+      p.revokedCount = BigInt.fromI32(1)
+      p.valueForSum = BigDecimal.fromString("0")
+      p.save()
+    }
+
+    // Update agent counters to reflect revocation
     let agent = Agent.load(agentEntityId)
     if (agent != null) {
-      updateAgentStatsAfterRevocation(agent, feedback.value, event.block.timestamp)
+      updateAgentCountersOnFeedback(agent, event.block.timestamp, false)
     }
     
     log.info("Feedback revoked for agent {}: {}", [agentEntityId, feedbackId])
@@ -215,74 +213,21 @@ export function handleResponseAppended(event: ResponseAppended): void {
 // =============================================================================
 
 function updateAgentStats(agent: Agent, value: BigDecimal, timestamp: BigInt): void {
-  // Update total feedback count
-  agent.totalFeedback = agent.totalFeedback.plus(BigInt.fromI32(1))
-  
-  // Update last activity
-  agent.lastActivity = timestamp
-  agent.updatedAt = timestamp
-  agent.save()
-  
-  // Update or create agent stats
-  let statsId = agent.id
-  let stats = AgentStats.load(statsId)
-  
-  if (stats == null) {
-    stats = new AgentStats(statsId)
-    stats.agent = agent.id
-    stats.totalFeedback = BigInt.fromI32(0)
-    stats.averageFeedbackValue = BigDecimal.fromString("0")
-    stats.totalValidations = BigInt.fromI32(0)
-    stats.completedValidations = BigInt.fromI32(0)
-    stats.averageValidationScore = BigDecimal.fromString("0")
-    stats.lastActivity = timestamp
-  }
-  
-  // Update feedback stats
-  stats.totalFeedback = stats.totalFeedback.plus(BigInt.fromI32(1))
-  
-  // Update average feedback value
-  let n = stats.totalFeedback
-  let nMinus1 = n.minus(BigInt.fromI32(1))
-  let total = stats.averageFeedbackValue.times(BigDecimal.fromString(nMinus1.toString()))
-  let newTotal = total.plus(value)
-  stats.averageFeedbackValue = newTotal.div(BigDecimal.fromString(n.toString()))
-  
-  stats.lastActivity = timestamp
-  stats.updatedAt = timestamp
-  stats.save()
+  // Deprecated: analytics moved to timeseries + aggregations.
 }
 
-function updateAgentStatsAfterRevocation(agent: Agent, revokedValue: BigDecimal, timestamp: BigInt): void {
-  // Update total feedback count
-  if (agent.totalFeedback.gt(BigInt.fromI32(0))) {
-    agent.totalFeedback = agent.totalFeedback.minus(BigInt.fromI32(1))
+function updateAgentCountersOnFeedback(agent: Agent, timestamp: BigInt, isCreate: boolean): void {
+  if (isCreate) {
+    agent.totalFeedback = agent.totalFeedback.plus(BigInt.fromI32(1))
+    agent.lastActivity = timestamp
+  } else {
+    if (agent.totalFeedback.gt(BigInt.fromI32(0))) {
+      agent.totalFeedback = agent.totalFeedback.minus(BigInt.fromI32(1))
+    }
   }
-  
-  // Note: Agent does not track averages - only AgentStats does
-  
+
   agent.updatedAt = timestamp
   agent.save()
-  
-  // Update agent stats
-  let stats = AgentStats.load(agent.id)
-  if (stats != null) {
-    let nOld = stats.totalFeedback
-    if (nOld.gt(BigInt.fromI32(0))) {
-      let totalOld = stats.averageFeedbackValue.times(BigDecimal.fromString(nOld.toString()))
-      let nNew = nOld.minus(BigInt.fromI32(1))
-      stats.totalFeedback = nNew
-
-      if (nNew.equals(BigInt.fromI32(0))) {
-        stats.averageFeedbackValue = BigDecimal.fromString("0")
-      } else {
-        let totalNew = totalOld.minus(revokedValue)
-        stats.averageFeedbackValue = totalNew.div(BigDecimal.fromString(nNew.toString()))
-      }
-    }
-    stats.updatedAt = timestamp
-    stats.save()
-  }
 }
 
 // Tag statistics removed for scalability
@@ -292,51 +237,4 @@ function updateAgentStatsAfterRevocation(agent: Agent, revokedValue: BigDecimal,
 // Reputation score calculation removed
 
 
-function updateProtocolStats(chainId: BigInt, agent: Agent, timestamp: BigInt, tag1: string, tag2: string): void {
-  // Check if chain is supported
-  if (!isSupportedChain(chainId)) {
-    log.warning("Unsupported chain: {}", [chainId.toString()])
-    return
-  }
-
-  let protocolId = chainId.toString()
-  let protocol = Protocol.load(protocolId)
-  
-  if (protocol == null) {
-    protocol = new Protocol(protocolId)
-    protocol.chainId = chainId
-    protocol.name = getChainName(chainId)
-    
-    // Get contract addresses dynamically based on chain
-    let addresses = getContractAddresses(chainId)
-    protocol.identityRegistry = addresses.identityRegistry
-    protocol.reputationRegistry = addresses.reputationRegistry
-    protocol.validationRegistry = addresses.validationRegistry
-    
-    // Initialize all fields
-    protocol.totalAgents = BigInt.fromI32(0)
-    protocol.totalFeedback = BigInt.fromI32(0)
-    protocol.totalValidations = BigInt.fromI32(0)
-    protocol.agents = []
-    protocol.tags = []
-    protocol.updatedAt = BigInt.fromI32(0)
-  }
-  
-  protocol.totalFeedback = protocol.totalFeedback.plus(BigInt.fromI32(1))
-  
-  // Add tags to protocol tags array
-  let currentTags = protocol.tags
-  
-  // Process tag1 if not empty
-  if (tag1.length > 0 && !currentTags.includes(tag1)) {
-    currentTags.push(tag1)
-  }
-  // Process tag2 if not empty
-  if (tag2.length > 0 && !currentTags.includes(tag2)) {
-    currentTags.push(tag2)
-  }
-  
-  protocol.tags = currentTags
-  protocol.updatedAt = timestamp
-  protocol.save()
-}
+// Protocol rollups moved to timeseries + aggregations.
