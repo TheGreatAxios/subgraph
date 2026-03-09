@@ -159,12 +159,23 @@
           "subgraph": "1.0.0"
         }
       },
+      "erc-8004-skale-base-mainnet": {
+        "network": "skale-base-mainnet",
+        "displayName": "SKALE Base Mainnet",
+        "chainId": "1187947933",
+        "status": "prod",
+        "configFile": "config/networks/skale-base-mainnet.json",
+        "versions": {
+          "schema": "1.0.0",
+          "subgraph": "1.0.0"
+        }
+      },
       "erc-8004-skale-sepolia": {
         "network": "skale-sepolia",
         "displayName": "SKALE Base Sepolia Testnet",
         "chainId": "1351057110",
         "status": "prod",
-        "configFile": "config/networks/skale-sepolia.json",
+        "configFile": "config/networks/skale-base-sepolia.json",
         "versions": {
           "schema": "1.0.0",
           "subgraph": "1.0.0"

@@ -145,12 +145,19 @@ export function getContractAddresses(chainId: BigInt): ContractAddresses {
   // SKALE Base Sepolia Testnet (1351057110)
   else if (chainId.equals(BigInt.fromString("1351057110"))) {
     return new ContractAddresses(
-      zero,
-      zero,
+      Bytes.fromHexString("0x8004A818BFB912233c491871b3d84c89A494BD9e"),
+      Bytes.fromHexString("0x8004B663056A597Dffe9eCcC1965A193B7388713"),
       zero
     )
   }
-
+  // SKALE Base Mainnet (1187947933)
+  else if (chainId.equals(BigInt.fromString("1187947933"))) {
+    return new ContractAddresses(
+      Bytes.fromHexString("0x8004A169FB4a3325136EB29fA0ceB6D2e539a432"),
+      Bytes.fromHexString("0x8004BAa17C55a88189AE136b182e5fdA19dE9b63"),
+      zero
+    )
+  }
   // Unsupported chain - return zero addresses
   return new ContractAddresses(
     zero,
